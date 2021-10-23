@@ -9,11 +9,9 @@ Clone this repo and run `raco pkg install` to install the plugin. Then open up a
 #### Example:
 ![image](https://user-images.githubusercontent.com/23691775/138539183-fce35bcb-71c7-4a7a-a77f-d67daeb0abae.png)
 
-## Project structure
+### Request body
 
-### `tool.rkt`
-
-Contains the logic of the client side plugin. Simply extends the definitions window to invoke a HTTP POST request every so often. Read the code for more details.
+Hostname, port, and slug are defined as constants within `tool.rkt`. Currently these point to `localhost:5000/`.
 
 The request body follows this schema:
 
@@ -25,6 +23,18 @@ The request body follows this schema:
   }
 }
 ```
+
+### Known issues
+
+Only text can be accessed via the editor mixins, so this currently does not support sending the multimedia file format for images and boxes.
+
+## Project structure
+
+### `tool.rkt`
+
+Contains the logic of the client side plugin. Simply extends the definitions window to invoke a HTTP POST request every so often. Read the code for more details.
+
+
 
 ### `test.server.rkt`
 
