@@ -1,219 +1,98 @@
 #lang racket/base
 (require drracket/tool
          racket/class
-         racket/local
-         racket/gui/base
          racket/unit
-         mrlib/switchable-button
-         net/rfc6455
-         net/url
-         web-server/http)
+         framework
+         net/http-client
+         json
+         rackunit)
 
-(provide tool@)
+;; The domain name of the webserver to receive editor content
+(define HOST "localhost")
+(define PORT 5000)
+;; The slug of the URI that represents the specific endpoint that recieves requests
+(define ENDPOINT "/")
 
-; This URL goes to a very simple websocket server hosted on Google Cloud Services
-; Theres a link to the repo in the README
-(define WS-URL (string->url "wss://drracket-code-sync.ue.r.appspot.com/"))
-
-; local server
-;(define WS-URL (string->url "ws://localhost:8080/"))
-
-
-
-; TODO:
-; fix set position/mline error, probably has to do with select-all in locked flow state
-; added a check, need to see if it works or not
-; remove all displaylns just in case that was a problem
-
-; images
-; and different modes maybe
+;; The number of "changes" required before backing up the editor content
+;; Where a "change" is defined as anything that will cause a visual change to the editor: 
+;; docs: https://docs.racket-lang.org/gui/editor___.html#%28meth._%28%28%28lib._mred%2Fmain..rkt%29._editor~3c~25~3e%29._on-change%29%29
+(define CHANGES-BEFORE-SAVE 250)
 
 
-
-
-(define RANDOM (make-pseudo-random-generator))
-(define CODE-LEN 6)
-(define MAX-CODE-LEN 12)
-
-
-; use (string [List-of Char])
-
-(define (generate-random-code)
-  (apply string-append (build-list CODE-LEN (lambda (x) (random-helper (random 1 36 RANDOM))))))
-
-(define (random-helper n)
-  (cond 
-    [(< n 10) (number->string n)]
-    [else (string (integer->char (+ 55 n)))]))
-
-(define (connect id)
-  (ws-connect WS-URL #:headers `(,(header #"namespace" (string->bytes/utf-8 id)))))
-
-(define (anonymously-connect)
-  (ws-connect WS-URL))
-
-(define c "Disconnected")
-
-;(define thd (thread (λ () (sync never-evt))))
-
-(define thd #f)
-
-(define tool@
-  (unit
-    (import drracket:tool^)
-    (export drracket:tool-exports^)
- 
-    ; note to self, mixins are ugly: maybe i can rewrite this as a class?
-    (define set-room-id-mixin
-      (mixin (drracket:unit:frame<%>) ()
-        (super-new)
-        (inherit get-button-panel
-                 get-definitions-text
-                 get-editor
-                 get-canvas)
-        (inherit register-toolbar-buttons)
-
-        (define/augment (on-close)
-          (when (ws-conn? c)(ws-close! c)))
- 
-        (local [(define id-text
-                  (new message%
-                       (label "Room ID: Disconnected")
-                       (parent (get-button-panel))))
-
-
-               
-                (define (queue-thread)
-                  (println "queuing thread")
-                  (if (and (ws-conn? c) (not (ws-conn-closed? c)))
-                      (and (println "setting thd!")
-                           (thread (λ ()
-                                     (println "in thunk, gonna recv data ohh man cant wait")
-                                     (clear-and-replace (ws-recv c #:payload-type 'text))
-                                     (queue-thread)))
-                           (println "ok, thread should be running"))     
-                      ; consider killing the thread here and replacing it with a never evt thread
-                      (send id-text set-label (string-append "Room ID: Disconnected"))))
-
-                (define (clear-and-replace text)
-                  
-                  (println "inside clear and replace")
-                  
-                  (send (get-canvas) enable #f)
-                  (cond
-                    ; connection was closed/terminated
-                    [(ws-conn-closed? c)
-                     (message-box "Connection Closed"  
-                                  "Uh oh! The connection to your Room has been closed.\n Please reconnect with 'Set Room ID'."
-                                  #f '(caution ok))]
-                    
-                    [(and
-                      (string? text)
-                      (equal? 'yes (message-box "Incoming Code Sync"  
-                                                "Would you like to recieve the incoming code from a member of your connected room?\n WARNING: All current code in your editor will be overwritten!"
-                                                #f '(yes-no))))
-                     (with-handlers ([exn:fail? (lambda (exn)
-                                                  (and (displayln (exn-message exn))
-                                                       (and (message-box "Editor Locked"  
-                                                                         "Oops! Your editor was locked to write/flow during the incoming sync. Retrying..."
-                                                                         #f '(caution ok))
-                                                            (thread (λ () (sleep 1) (clear-and-replace text))))))])
-                       ;(or (send (get-editor) locked-for-flow?)
-                       ;    (send (get-editor) locked-for-write?))
-                       (begin (send (get-definitions-text) select-all)
-                              (send (get-definitions-text) insert text))
-                       )])
-                  (send (get-canvas) enable #t))
-                
-                (define btn
-                  (new switchable-button% 
-                       (label "Set Room ID")
-                       (callback (λ (button)
-                                   (letrec [(code (generate-random-code))
-                                            (id (get-text-from-user "Set Room ID"
-                                                                    "If you are creating a room, use the pre-generated Room ID.\nOtherwise, if you're joining another user, input their Room ID below."
-                                                                    #f	 
-                                                                    code
-                                                                    '(disallow-invalid)
-                                                                    #:validate (λ (id) (and (>= (string-length id) CODE-LEN)
-                                                                                            (<= (string-length id) MAX-CODE-LEN)))))]
-                                     (and id
-                                          ;(when (ws-conn? c) (thread (λ () (ws-close! c))))
-                                          (set! c (connect id))
-                                          (send id-text set-label (string-append "Room ID: " id))
-                                          ;kill the current thread
-                                          ;restart it
-                                          
-                                          ;thd is set within queue-thread
-                                          (println "got here")
-                                          (queue-thread)
-                                          ;(and thd (kill-thread thd))
-                                          ))))
-
-                       (parent (get-button-panel))
-                       (bitmap id-bitmap)))
-              
-                (define btn2
-                  (new switchable-button%
-                       (label "Send Code")
-                       (callback (λ (button)
-                                   (if (and (ws-conn? c) (not (ws-conn-closed? c)))
-                                       (equal? 'yes (message-box "Send code"  
-                                                "Are you sure you want to share your code will all other members of the room?"
-                                                #f '(yes-no)))
-                                       ;might wanna add a timer that disables the button for a few seconds
-                                       (message-box "No Connection"  
-                                                    "You are not currently connected to a Room. \nClick 'Set Room ID' to join/create a room first!"
-                                                    #f '(caution ok)))))
-                       (parent (get-button-panel))
-                       (bitmap sync-bitmap)))]
-
+;; make-cloud-backup-plugin : [String -> Void] -> Unit
+;; produces a DrRacket plugin that invokes `send-content` to send the entire definitions window:
+;; - every `CHANGES-BEFORE-SAVE` changes,
+;; - on every file save event (including auto-saves and manual saves),
+;; - on every close tab/window event.
+(define (make-cloud-backup-plugin send-content)
+  (make-plugin:extend-definitions-text
+   (mixin (text:file<%>) ()
+     (super-new)
+     (inherit get-text)
+     (field (changes-since-last-save 0))
+    
+     (define/augment (on-change)
+       (set! changes-since-last-save (add1 changes-since-last-save))
+       (when (>= changes-since-last-save CHANGES-BEFORE-SAVE)
+         (send-content (get-text))
+         (set! changes-since-last-save 0)))
           
+     (define/augment (on-save-file _filename _format)
+       (send-content (get-text)))
 
-          (register-toolbar-buttons (list btn btn2) #:numbers (list 11 12))
+     (define/augment (on-close)
+       (send-content (get-text))))))
 
+;; make-plugin:extend-definitions-text : [Mixin text:file<%>] -> Unit
+;; builds a DrRacket plugin (tool) that overrides the behavior of the definitions window text.
+(define (make-plugin:extend-definitions-text defs-text-mixin)
+  (unit
+      (import drracket:tool^)
+      (export drracket:tool-exports^)
+      (define (phase1) (void))
+      (define (phase2) (void))
+      (drracket:get/extend:extend-definitions-text defs-text-mixin)))
 
-          (send (get-button-panel) change-children
-                (λ (l)
-                  (cons btn2 (remq btn2 l))))
-          (send (get-button-panel) change-children
-                (λ (l)
-                  (cons btn (remq btn l))))
-          (send (get-button-panel) change-children
-                (λ (l)
-                  (cons id-text (remq id-text l)))))))
-
-    ;let*
-    ;better icons
-    (define id-bitmap
-      (let* ((bmp (make-bitmap 16 16))
-             (bdc (make-object bitmap-dc% bmp)))
-        (send bdc erase)
-        (send bdc set-smoothing 'smoothed)
-        (send bdc set-pen "black" 1 'transparent)
-        (send bdc set-brush "blue" 'solid)
-        (send bdc draw-ellipse 2 2 8 8)
-        (send bdc set-brush "red" 'solid)
-        (send bdc draw-ellipse 6 6 8 8)
-        (send bdc set-bitmap #f)
-        bmp))
-
-    (define sync-bitmap
-      (let* ((bmp (make-bitmap 16 16))
-             (bdc (make-object bitmap-dc% bmp)))
-        (send bdc erase)
-        (send bdc set-smoothing 'smoothed)
-        (send bdc set-pen "black" 1 'transparent)
-        (send bdc set-brush "purple" 'solid)
-        (send bdc draw-ellipse 2 2 8 8)
-        (send bdc set-brush "yellow" 'solid)
-        (send bdc draw-ellipse 6 6 8 8)
-        (send bdc set-bitmap #f)
-        bmp))
-
-    (define (phase1) (void))
-    (define (phase2) (void))
-
-    (drracket:get/extend:extend-unit-frame set-room-id-mixin)))
+;; upload-to-cloud : String -> Void
+;; sends an HTTP request containing the editor text content and relevant metadata
+;; does nothing if the request is unsuccessful
+;; HTTP request done in a worker thread asyncronously
+(define (upload-to-cloud editor-content)
+  (thread (λ ()
+            (let ([json-body (serialize-data editor-content (hash))])
+              (with-handlers ([exn:fail? (λ (exn) (displayln exn))]) ;; TODO: graceful error handling
+                (http-conn-send! 
+                 (http-conn-open HOST #:port PORT) 
+                 ENDPOINT 
+                 #:method #"POST" 
+                 #:data json-body))))))
 
 
+;; serialize-data : String [Hash-of Symbol String] -> String
+;; encodes the given data into a JSON object to be sent to the server
+#|
+Schema:
+{
+  content: String,
+  metadata: {
+    ...
+  }
+}
+|#
+(define (serialize-data editor-content metadata)
+  (jsexpr->string (hash 'content editor-content
+                        'metadata metadata)))
+
+(check-equal? (serialize-data "content from the editor" (hash))
+              "{\"content\":\"content from the editor\",\"metadata\":{}}")
+(check-equal? (serialize-data "content from the editor" (hash 'name "Ryan"))
+              "{\"content\":\"content from the editor\",\"metadata\":{\"name\":\"Ryan\"}}")
+(check-equal? (serialize-data "" (hash))
+              "{\"content\":\"\",\"metadata\":{}}")
+
+
+
+(define CLOUD-BACKUP-PLUGIN (make-cloud-backup-plugin upload-to-cloud))
+
+;; Per the DrRacket plugin system, this must be exported under the name `tool@`
+(provide (rename-out [CLOUD-BACKUP-PLUGIN tool@]))

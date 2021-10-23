@@ -1,5 +1,5 @@
-code-sync
-Copyright (c) 2020 forry
+cloud-backup-client
+Copyright (c) 2020 Ryan Jung
 
 This package is distributed under the GNU Lesser General Public
 License (LGPL).  This means that you can link code-sync into proprietary
